@@ -6,7 +6,7 @@ local function check(network,sender,_,recipient,text)
 end
 local function load()
 	function commands.ptsave(query,id)
-		checktype({"number"},{id})
+		proto({ 'number' }, id)
 		local id=tonumber(id)
 		local data=http("powdertoy.co.uk/Browse/View.json?ID="..id)
 		if data then

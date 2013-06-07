@@ -1,7 +1,7 @@
 commands=commands or {}
 
 function commands.load(query,file)
-	checktype({"string"},{file})
+	proto({ 'string' }, file)
 	if not file:find"%.[^/]+$" then
 		file=file..".lua"
 	end
@@ -49,7 +49,7 @@ commands["%"]=function(query)
 end
 
 function commands.dns(query,address,verbose)
-	checktype({"string"},{address})
+	proto({ 'string' }, address)
 	if address:match"%d+%.%d+%.%d+%.%d+" then
 		if verbose=="verbose" then
 			local data=assert(io.popen("host '"..address:gsub("[\\']","\\%1").."'")):read"*a"or""
@@ -88,7 +88,7 @@ function commands.echo(query)
 end
 
 function commands.remind(query,time,message)
-	checktype({"number","string"},{time,message})
+	proto({ 'number', 'string' }, time, message)
 	if tonumber(time)>3600 then
 		return "I doubt i will remember it by then..."
 	end
@@ -114,7 +114,7 @@ function commands.help(query,func)
 end
 
 function commands.insmod(query,file)
-	checktype({"string"},{file})
+	proto({ 'string' }, file)
 	assert(not unload_mod[file],"Module "..file.." already loaded")
 	local func=assert(loadfile("plugins/"..file..".lua"))
 	local loader
@@ -124,7 +124,7 @@ function commands.insmod(query,file)
 end
 
 function commands.rmmod(query,file)
-	checktype({"string"},{file})
+	proto({ 'string' }, file)
 	assert(unload_mod[file],"Module "..file.." wasn't loaded")
 	unload_mod[file]()
 	unload_mod[file]=nil
@@ -143,9 +143,9 @@ function commands.lsmods(query)
 	return table.concat(t,", ")
 end
 
-function commands.isup(query,host,port)
-	port=port or 80
-	checktype({"string","number"},{host,port})
+function commands.isup(query, host, port)
+	port = port or 80
+	proto({ 'string', 'number' }, host, port)
 	local sock=socket.connect(host,tonumber(port))
 	if sock then
 		sock:close()
@@ -238,7 +238,7 @@ end]]
 end
 
 function commands.base(query,from,to,number)
-	checktype({"number","number","string"},{from,to,number})
+	proto({ 'number', 'number', 'string' }, from, to, number)
 	local f,t=math.floor(tonumber(from)),math.floor(tonumber(to))
 	assert(f>1 and t>1,"Base should be at least 2")
 	assert(f<=1000000 and t<=1000000,"Base should be at most 1000000")
@@ -398,7 +398,7 @@ function commands.md5(query)
 end
 
 function commands.hostmask(query,nick)
-	checktype({"string"},{nick})
+	proto({ 'string' }, nick)
 	assert(nick:match"^[A-Za-z{|}~`^[%]\\_-]","Looks like an invalid nickname")
 	local info=whois(query.network,nick)[1]
 	if info then

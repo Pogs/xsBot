@@ -63,9 +63,7 @@ http =
 
 		c:settimeout(timeout or 3)
 
-		if url:match('http://') then
-			url = url:sub(7)
-		end
+		url = url:gsub('^http://', '')
 
 		-- hardcoded port might be bad. T.T
 		if not c:connect(url:match('^[^/:]+'), 80) then
@@ -98,51 +96,50 @@ http =
 			o = d:sub(1, e + 1)
 		end
 
-		-- not needed anymore.. ~
-		d = nil
+		if not h:upper():find('TRANSFER%-ENCODING:%s+CHUNKED%s*\r?\n') then
+			return o
+		end
 
-		if h:upper():find('TRANSFER%-ENCODING:%s+CHUNKED%s*\r?\n') then
-			local s = {}
-			local i = 1
+		-- chunked transfer from here on
+		local s = {}
+		local i = 1
 
-			while true do
-				if #s > 255 then
-					s = { table.concat(s) }
-				end
+		while true do
+			if #s > 255 then
+				s = { table.concat(s) }
 
 				-- 32KiB
 				assert(#s[1] < 32768, 'LOL')
-
-				local n = o:match('(%x+)\r\n', i)
-
-				assert(n, 'malformed http chunk; invalid or missing size')
-
-				-- advance past: 2F\r\n (example)
-				i = i + #n + 2
-
-				-- this will always succeed
-				n = tonumber(n, 16)
-
-				-- last chunk reached, we don't even
-				-- care about the trailing '\r\n'
-				if n == 0 then
-					break
-				end
-
-				local tmp = o:match('.*\r\n', i)
-
-				assert(tmp, 'malformed http chunk; no data for size')
-
-				table.insert(s, tmp)
-
-				-- advanced past: data\r\n (example)
-				i = i + #tmp + 2
 			end
 
-			return table.concat(s)
+
+			local n = o:match('(%x+)\r\n', i)
+
+			assert(n, 'malformed http transfer chunk; invalid or missing size')
+
+			-- advance past: 2F\r\n (example)
+			i = i + #n + 2
+
+			-- this will always succeed
+			n = tonumber(n, 16)
+
+			-- last chunk reached, we don't even
+			-- care about the trailing '\r\n'
+			if n == 0 then
+				break
+			end
+
+			local tmp = nil
+
+			-- update i at the same time
+			tmp, i = o:match('(.*)\r\n()', i)
+
+			assert(tmp, 'malformed http transfer chunk; no data for size')
+
+			table.insert(s, tmp)
 		end
 
-		return o
+		return table.concat(s)
 	end
 
 _break =
@@ -150,20 +147,109 @@ _break =
 		loop_level = loop_level - 1
 	end
 
-checktype =
-	function (types, values)
-		for i,v in ipairs(types) do
-			if values[i] == nil then
-				error("a "..v.." expected!")
-		elseif v=="number" then
-			if not tonumber(values[i]) then
-				error('"'..tostring(values[i])..'" doesnt look like a number to me')
+-- bad argument #2 to 'print' (string expected, got table)
+-- too few arguments to 'herplah' (5 expected, got 3)
+local type_err = [[%s to '%s' (%s expected, got %s)]]
+
+ferror =
+	function (e, l)
+		error(string.format(table.unpack(e)), l)
+	end
+
+proto =
+	function (types, ...)
+		-- the function calling assert_proto()
+		local fname  = debug.getinfo(2, 'n').name
+
+		-- #types is important
+		for i = 1, #types do
+			local v = select(i, ...)
+			local t = types[i]
+			local vt = type(v)
+
+			if t == '*' then
+				goto continue
 			end
-		elseif type(values[i])~=v then
-			error("a "..v.." expected, got "..type(values[i]))
+
+			-- a value that equates to true
+			if t == '!' then
+				if v then
+					goto continue
+				end
+
+				ferror({ type_err, 'bad arrgument #' .. i, fname, 'truth', vt }, 2)
+			end
+
+			-- '!string' == anything but string
+			if t:match('^!') then
+				t = t:gsub('^!', '')
+
+				if t == vt then
+					ferror({ type_err, 'bad argument #' .. i, fname, 'not-' .. t, t }, 2)
+				end
+
+				goto continue
+			end
+
+			-- special case for strings that can be numbers
+			if t == 'number' then
+				if not tonumber(v) then
+					ferror({ type_err, 'bad argument #' .. i, fname, t, vt }, 2)
+				end
+			elseif t ~= vt then
+				ferror({ type_err, 'bad argument #' .. i, fname, t, vt }, 2)
+			end
+
+			::continue::
+		end
+
+		local nargs = select('#', ...)
+
+		if types.min and nargs < types.min then
+			ferror({ type_err, 'too few arguments', fname, 'at least ' .. types.min, nargs }, 2)
+		end
+
+		if types.max and nargs > types.max then
+			ferror({ type_err, 'too many arguments', fname, 'at most ' .. types.max, nargs }, 2)
+		end
+		
+		if types.expects and nargs ~= types.expects then
+			if nargs < types.expects then
+				ferror({ type_err, 'too few arguments', fname, types.expects, nargs }, 2)
+			end
+
+			if nargs > types.expects then
+				ferror({ type_err, 'too many arguments', fname, types.expects, nargs }, 2)
+			end
+		end
+
+		-- saved the craziest check for last
+		if types.callers then
+			local caller, cname = nil, nil
+
+			do
+				local tmp = debug.getinfo(3, 'fn')
+				caller = tmp.func
+				cname  = tmp.name
+			end
+
+			for _, c in pairs(types.callers) do
+				if caller == c then
+					return
+				end
+			end
+
+			local new = {}
+
+			-- gotta iterate backward
+			for _, c in pairs(types.callers) do
+				c = tostring(c):match('%S+$')
+				table.insert(new, c)
+			end
+
+			ferror({ type_err, 'unauthorized call', fname, 'function: ' .. table.concat(new, '/'), string.format([[%s '%s']], tostring(caller), cname) }, 2)
 		end
 	end
-end
 
 nstime =
 	function ()
