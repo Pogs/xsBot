@@ -20,59 +20,141 @@ function allowed(network,channel,host,command)
 	end
 	return (level or 0)>=(config.level[lower(command)] or 1/0)
 end
-function tolua(...)
-	local s=""
-	local t={...}
-	for i,v in ipairs(t) do
-		if type(v)=="table" then
-			s=s.." {?}"
-		elseif type(v)=="function" then
-			s=s.." function"
-		elseif type(v)=="string" then
-			s=s..' "'..v..'"'
-		else
-			s=s.." "..tostring(v)
+
+push =
+	function (t, ...)
+		for i = 1, select('#', ...) do
+			local v = select(i, ...)
+
+			table.insert(t, v)
 		end
-		if i~=#t then
-			s=s..","
-		end
+
+		return t
 	end
-	return s
-end
-function http(url)
-	local c=socket.tcp()
-	c:settimeout(3)
-	if not c:connect(url:match"^[^/]+",80) then
-		return
+
+squote =
+	function (s)
+		return [[']] .. s:gsub([[']], [[\']]) .. [[']]
 	end
-	c:send("GET "..url:match"/.*$".." HTTP/1.1\nConnection: close\nHost: "..url:match"^[^/]+".."\n\n")
-	local d=c:receive"*a"
-	if not d then
-		return
-	end
-	local o=d:match"\r?\n\r?\n(.*)$"
-	if d:find"Transfer%-Encoding: chunked" then
-		local s=""
-		while assert(#s<100000,"LOL") do
-			local n
-			n,o=o:match"^\r?\n?\r?([a-fA-F0-9]+)\r?\n\r?(.*)$"
-			n=tonumber("0x"..n)
-			if n==0 then
-				break
+
+tolua =
+	function (...)
+		local s = {}
+
+		for i = 1, select('#', ...) do
+			local v = select(i, ...)
+			local t = type(v)
+
+			-- ordered by most common (guessing)
+			if     t == 'string'   then table.insert(s, squote(v))
+			elseif t == 'function' then table.insert(s, 'function')
+			elseif t == 'table'    then table.insert(s, '{?}')
+			elseif t == 'thread'   then table.insert(s, 'thread')
+			else                        table.insert(s, tostring(v))
 			end
-			s,o=s..o:sub(1,n),o:sub(n+1)
 		end
-		return s
+
+		return table.concat(s, ', ')
 	end
-	return o
-end
-function _break()
-	loop_level=loop_level-1
-end
-function checktype(types,values)
-	for i,v in ipairs(types) do
-		if values[i]==nil then
-			error("a "..v.." expected!")
+
+http =
+	function (url, timeout)
+		local c = socket.tcp()
+
+		c:settimeout(timeout or 3)
+
+		if url:match('http://') then
+			url = url:sub(7)
+		end
+
+		-- hardcoded port might be bad. T.T
+		if not c:connect(url:match('^[^/:]+'), 80) then
+			return
+		end
+
+		c:send
+		(
+			string.format
+			(
+				'Get %s HTTP/1.1\r\n' ..
+				'Host: %s\r\n' ..
+				'Connection: close\r\n' ..
+				'\r\n',
+				url:match('/.*$') or '/',
+				url:match('^[^/:]+')
+			)
+		)
+
+		local d = c:receive('*a')
+
+		if not d then
+			return
+		end
+
+		local h, o = nil, nil
+		do 
+			local s, e = d:find('\r?\n\r?\n')
+			h = d:sub(1, s - 1)
+			o = d:sub(1, e + 1)
+		end
+
+		-- not needed anymore.. ~
+		d = nil
+
+		if h:upper():find('TRANSFER%-ENCODING:%s+CHUNKED%s*\r?\n') then
+			local s = {}
+			local i = 1
+
+			while true do
+				if #s > 255 then
+					s = { table.concat(s) }
+				end
+
+				-- 32KiB
+				assert(#s[1] < 32768, 'LOL')
+
+				local n = o:match('(%x+)\r\n', i)
+
+				assert(n, 'malformed http chunk; invalid or missing size')
+
+				-- advance past: 2F\r\n (example)
+				i = i + #n + 2
+
+				-- this will always succeed
+				n = tonumber(n, 16)
+
+				-- last chunk reached, we don't even
+				-- care about the trailing '\r\n'
+				if n == 0 then
+					break
+				end
+
+				local tmp = o:match('.*\r\n', i)
+
+				assert(tmp, 'malformed http chunk; no data for size')
+
+				table.insert(s, tmp)
+
+				-- advanced past: data\r\n (example)
+				i = i + #tmp + 2
+			end
+
+			return table.concat(s)
+		end
+
+		return o
+	end
+
+_break =
+	function ()
+		loop_level = loop_level - 1
+	end
+
+checktype =
+	function (types, values)
+		for i,v in ipairs(types) do
+			if values[i] == nil then
+				error("a "..v.." expected!")
 		elseif v=="number" then
 			if not tonumber(values[i]) then
 				error('"'..tostring(values[i])..'" doesnt look like a number to me')
@@ -82,12 +164,17 @@ function checktype(types,values)
 		end
 	end
 end
-function nstime()
-	local file=assert(io.popen"date +%s.%N")
-	local time=assert(tonumber(file:read"*a"))
-	file:close()
-	return time
-end
+
+nstime =
+	function ()
+		local file = assert(io.popen'date +%s.%N')
+		local time = assert(tonumber(file:read'*a'))
+
+		file:close()
+
+		return time
+	end
+
 do
 	local last_used={}
 	local function timedsend(network,channel,text)
